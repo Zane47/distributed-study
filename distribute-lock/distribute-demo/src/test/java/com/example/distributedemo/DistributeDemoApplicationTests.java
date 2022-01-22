@@ -19,14 +19,16 @@ public class DistributeDemoApplicationTests {
 
     // 1. 代码中实现扣除库存 -> 导致超卖问题
     // @Qualifier("orderServiceImpl1_bug")
+    // 2. 扣除库存逻辑放到数据库中
+    // @Qualifier("OrderServiceImpl2_dbupdate")
 
-    @Qualifier("OrderServiceImpl2_dbupdate")
+    @Qualifier("OrderServiceImpl3_synchronized")
     @Autowired
     private OrderService orderService;
 
     @Test
     public void concurrentOrder() throws InterruptedException {
-        Thread.sleep(60000);
+        // Thread.sleep(60000);
 
         CountDownLatch countDownLatch = new CountDownLatch(5);
 

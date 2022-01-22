@@ -519,7 +519,17 @@ public synchronized Integer createOrder() throws Exception {
 }
 ```
 
-product中库存改成1, 然后清空order和order_item表
+product中库存改成1, 然后清空order和order_item表, 运行后查看
+
+查看console, 可以看到后面的线程抛出错误, 但是又在最后生成了新订单:
+
+```
+
+```
+
+
+
+
 
 
 

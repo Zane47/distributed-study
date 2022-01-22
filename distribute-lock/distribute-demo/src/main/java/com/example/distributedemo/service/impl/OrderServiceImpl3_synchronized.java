@@ -19,7 +19,7 @@ import java.util.Date;
  * 方法上加Synchronized
  *
  */
-@Service("OrderServiceImpl2_dbupdate")
+@Service("OrderServiceImpl3_synchronized")
 @Slf4j
 public class OrderServiceImpl3_synchronized implements OrderService {
 
