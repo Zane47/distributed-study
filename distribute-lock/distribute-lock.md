@@ -421,9 +421,21 @@ java.lang.Exception: 商品100100仅剩0件, 无法购买
 
 
 
+关键的步骤在于:
 
+```java
+if (purchaseProductNum > currentCount) {
+    throw new Exception("商品" + purchaseProductId + "仅剩" + currentCount + "件, 无法购买");
+}
+```
 
+校验库存的时候, 因为是并发执行, 所以每一个线程判断条件都可能满足, 然后执行更新操作
 
+所以需要修改检索库存和校验库存的逻辑.
+
+法一:
+
+在update行锁之后再校验库存, 如果为负数, 则抛出异常. 抛出异常后更新操作回滚. 
 
 
 
