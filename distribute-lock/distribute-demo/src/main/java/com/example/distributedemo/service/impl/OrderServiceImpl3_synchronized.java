@@ -16,12 +16,12 @@ import java.math.BigDecimal;
 import java.util.Date;
 
 /**
- * 使用数据库行锁解决超卖问题
+ * 方法上加Synchronized
  *
  */
 @Service("OrderServiceImpl2_dbupdate")
 @Slf4j
-public class OrderServiceImpl2_dbupdate implements OrderService {
+public class OrderServiceImpl3_synchronized implements OrderService {
 
     @Resource
     private OrderMapper orderMapper;
@@ -40,7 +40,7 @@ public class OrderServiceImpl2_dbupdate implements OrderService {
      */
     @Transactional(rollbackOn = Exception.class)
     @Override
-    public Integer createOrder() throws Exception {
+    public synchronized Integer createOrder() throws Exception {
         // ------------------------ 在程序中计算库存的数量 ------------------------
         Product product = productMapper.selectByPrimaryKey(purchaseProductId);
         if (product == null) {

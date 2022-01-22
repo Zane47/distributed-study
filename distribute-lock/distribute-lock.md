@@ -10,9 +10,7 @@
 
 
 
-#  超卖问题
-
-## 超卖现象1
+# 超卖现象1
 
 举例: 某件商品库存数量10件, 结果卖出了15件
 
@@ -389,9 +387,9 @@ if (purchaseProductNum > currentCount) {
 java.lang.Exception: 商品100100仅剩0件, 无法购买
 ```
 
+# 超卖现象2
 
-
-## 超卖现象2
+## 场景
 
 回顾:
 
@@ -437,6 +435,91 @@ if (purchaseProductNum > currentCount) {
 
 在update行锁之后再校验库存, 如果为负数, 则抛出异常. 抛出异常后更新操作回滚. 
 
+```java
+Product product = productMapper.selectByPrimaryKey(purchaseProductId);
+if (product == null) {
+    throw new Exception("购买商品：" + purchaseProductId + "不存在");
+}
+
+// 商品当前库存
+Integer currentCount = product.getCount();
+
+// 重要: 校验库存
+if (purchaseProductNum > currentCount) {
+    throw new Exception("商品" + purchaseProductId + "仅剩" + currentCount + "件，无法购买");
+}
+
+// 使用数据库行锁解决超卖
+productMapper.updateProductCount(purchaseProductNum, "xxx", new Date(), product.getId());
+
+
+// 校验库存
+// 如果库存为负数, 报错
+...
+```
+
+了解即可, 这里使用锁来解决
+
+---
+
+方法二: 锁
+
+1. 校验库存, 扣减库存统一加锁, 使之成为原子性操作. 并发时，只有获得锁的线程才能校验、扣减库存
+
+2. 扣减库存结束后，释放锁. 确保库存不会扣成负数
+
+-> 基于Synchronized锁解决超卖问题(最原始的锁); 
+
+-> 基于ReentrantLock锁解决超卖问题
+
+## 基于Synchronized锁解决超卖问题
+
+校验库存和扣减库存的时候加锁
+
+
+
+方法上加synchronized锁, 只有一个线程可以进入该方法
+
+```java
+@Transactional(rollbackOn = Exception.class)
+@Override
+public synchronized Integer createOrder() throws Exception {
+    // ------------------------ 在程序中计算库存的数量 ------------------------
+    Product product = productMapper.selectByPrimaryKey(purchaseProductId);
+    if (product == null) {
+        throw new Exception("购买商品：" + purchaseProductId + "不存在");
+    }
+
+    // 商品当前库存
+    Integer currentCount = product.getCount();
+
+    // 重要: 校验库存
+    if (purchaseProductNum > currentCount) {
+        throw new Exception("商品" + purchaseProductId + "仅剩" + currentCount + "件，无法购买");
+    }
+
+    // 计算剩余库存
+    // Integer leftCount = currentCount - purchaseProductNum;
+    // 更新库存
+    // product.setCount(leftCount);
+    // product.setUpdateTime(new Date());
+    // product.setUpdateUser("xxx");
+    // productMapper.updateByPrimaryKeySelective(product);
+
+
+    // 使用数据库行锁解决超卖
+    productMapper.updateProductCount(purchaseProductNum, "xxx", new Date(), product.getId());
+
+
+    // 校验库存
+    // 如果库存为负数, 报错
+
+    // ------------------------ 创建订单 ------------------------
+    
+}
+```
+
+product中库存改成1, 然后清空order和order_item表
 
 
 
@@ -447,27 +530,12 @@ if (purchaseProductNum > currentCount) {
 
 
 
-# 基于Synchronized锁解决超卖问题
 
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# 基于ReentrantLock锁解决超卖问题
+## 基于ReentrantLock锁解决超卖问题
 
 
 
