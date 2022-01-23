@@ -15,18 +15,17 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 
 import javax.annotation.Resource;
-import javax.transaction.Transactional;
 import java.math.BigDecimal;
 import java.util.Date;
 
 /**
- * 方法上加Synchronized
+ * synchronized块锁
  *
  * 自己管理事务的提交
  */
-@Service("OrderServiceImpl3_synchronized")
+@Service("OrderServiceImpl4_synchronized")
 @Slf4j
-public class OrderServiceImpl3_synchronized implements OrderService {
+public class OrderServiceImpl4_synchronized implements OrderService {
 
     @Resource
     private OrderMapper orderMapper;
@@ -51,45 +50,42 @@ public class OrderServiceImpl3_synchronized implements OrderService {
      */
     // @Transactional(rollbackOn = Exception.class)
     @Override
-    public synchronized Integer createOrder() throws Exception {
+    public Integer createOrder() throws Exception {
+        Product product = null;
+        synchronized (this) {
+            TransactionStatus transaction1 = platformTransactionManager.getTransaction(transactionDefinition);
+            product = productMapper.selectByPrimaryKey(purchaseProductId);
+            if (product == null) {
+                platformTransactionManager.rollback(transaction1);
+                throw new Exception("购买商品：" + purchaseProductId + "不存在");
+            }
 
-        TransactionStatus transaction = platformTransactionManager.getTransaction(transactionDefinition);
 
-        // ------------------------ 在程序中计算库存的数量 ------------------------
-        Product product = productMapper.selectByPrimaryKey(purchaseProductId);
-        if (product == null) {
-            platformTransactionManager.rollback(transaction);
-            throw new Exception("购买商品：" + purchaseProductId + "不存在");
+            // 商品当前库存
+            Integer currentCount = product.getCount();
+            // 当前线程名称
+            System.out.println(Thread.currentThread().getName() + "库存数: " + currentCount);
+
+            // 重要: 校验库存
+            if (purchaseProductNum > currentCount) {
+                platformTransactionManager.rollback(transaction1);
+                throw new Exception("商品" + purchaseProductId + "仅剩" + currentCount + "件，无法购买");
+            }
+
+            // 使用数据库行锁解决超卖
+            productMapper.updateProductCount(purchaseProductNum, "xxx", new Date(), product.getId());
+
+            platformTransactionManager.commit(transaction1);
         }
 
-        // 商品当前库存
-        Integer currentCount = product.getCount();
-        // 当前线程名称
-        System.out.println(Thread.currentThread().getName() + "库存数: " + currentCount);
 
-        // 重要: 校验库存
-        if (purchaseProductNum > currentCount) {
-            platformTransactionManager.rollback(transaction);
-            throw new Exception("商品" + purchaseProductId + "仅剩" + currentCount + "件，无法购买");
-        }
-
-        // 计算剩余库存
-        // Integer leftCount = currentCount - purchaseProductNum;
-        // 更新库存
-        // product.setCount(leftCount);
-        // product.setUpdateTime(new Date());
-        // product.setUpdateUser("xxx");
-        // productMapper.updateByPrimaryKeySelective(product);
-
-
-        // 使用数据库行锁解决超卖
-        productMapper.updateProductCount(purchaseProductNum, "xxx", new Date(), product.getId());
-
-
-        // 校验库存
-        // 如果库存为负数, 报错
 
         // ------------------------ 创建订单 ------------------------
+
+
+        // 插入的时候也新建事务
+        TransactionStatus transaction2 = platformTransactionManager.getTransaction(transactionDefinition);
+
         Order order = new Order();
         order.setOrderAmount(product.getPrice().multiply(new BigDecimal(purchaseProductNum)));
         order.setOrderStatus(1);//待处理
@@ -111,7 +107,7 @@ public class OrderServiceImpl3_synchronized implements OrderService {
         orderItem.setUpdateTime(new Date());
         orderItem.setUpdateUser("xxx");
         orderItemMapper.insertSelective(orderItem);
-        platformTransactionManager.commit(transaction);
+        platformTransactionManager.commit(transaction2);
         return order.getId();
     }
 

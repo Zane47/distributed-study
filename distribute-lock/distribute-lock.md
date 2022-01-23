@@ -474,6 +474,10 @@ productMapper.updateProductCount(purchaseProductNum, "xxx", new Date(), product.
 
 ## 基于Synchronized锁解决超卖问题
 
+### 方法锁
+
+
+
 校验库存和扣减库存的时候加锁
 
 
@@ -524,24 +528,297 @@ product中库存改成1, 然后清空order和order_item表, 运行后查看
 查看console, 可以看到后面的线程抛出错误, 但是又在最后生成了新订单:
 
 ```
+pool-1-thread-4库存数：1
+pool-1-thread-3库存数：1
+订单id: 37
+pool-1-thread-2库存数：0
+pool-1-thread-1库存数：0
+java.lang.Exception: 商品100100仅剩0件，无法购买
+pool-1-thread-5库存数：0
+java.lang.Exception: 商品100100仅剩0件，无法购买
+java.lang.Exception: 商品100100仅剩0件，无法购买
+订单id: 38
+```
 
+可以看到线程3和线程4读到的库存都是1, 为什么两个线程读取到的是1?
+
+查看程序可以看到
+
+```java
+@Transactional(rollbackOn = Exception.class)
+@Override
+public synchronized Integer createOrder() throws Exception {}
+```
+
+锁只锁住了当前的方法, 方法之前完之后, 锁就释放, 其他线程可以进入. 第一个线程更新完之后, 数据库并没有修改, 因为事务还没有提交, 但是第二个线程已经进来了, 又检索数据, 查到的是提交数据之前的数据, 所有库存还是1
+
+简单来说就是, 第一个线程中事务还没有提交,方法执行结束了. 第二个线程进来查询到数据库中库存还是1.
+
+---
+
+解决方法: 使用锁把事务锁起来, 保证事务的提交也在锁的范围内, 事务提交时候再释放锁.
+
+需要手动控制事务. 
+
+1. 删除事务注解
+
+2. 注入两个类
+
+```java
+@Autowired
+private PlatformTransactionManager platformTransactionManager;
+
+@Autowired
+private TransactionDefinition transactionDefinition;
+```
+
+3. 手动控制事务
+
+在进入的时候获得事务, 在最后提交事务, 报错的时候rollback
+
+```java
+@Override
+public synchronized Integer createOrder() throws Exception {
+
+    TransactionStatus transaction = platformTransactionManager.getTransaction(transactionDefinition);
+
+
+    // ------------------------ 在程序中计算库存的数量 ------------------------
+    Product product = productMapper.selectByPrimaryKey(purchaseProductId);
+    if (product == null) {
+        platformTransactionManager.rollback(transaction);
+        throw new Exception("购买商品：" + purchaseProductId + "不存在");
+    }
+
+    // 商品当前库存
+    Integer currentCount = product.getCount();
+    // 当前线程名称
+    System.out.println(Thread.currentThread().getName() + "库存数: " + currentCount);
+
+    // 重要: 校验库存
+    if (purchaseProductNum > currentCount) {
+        platformTransactionManager.rollback(transaction);
+        throw new Exception("商品" + purchaseProductId + "仅剩" + currentCount + "件，无法购买");
+    }
+
+    // 计算剩余库存
+    // Integer leftCount = currentCount - purchaseProductNum;
+    // 更新库存
+    // product.setCount(leftCount);
+    // product.setUpdateTime(new Date());
+    // product.setUpdateUser("xxx");
+    // productMapper.updateByPrimaryKeySelective(product);
+
+
+    // 使用数据库行锁解决超卖
+    productMapper.updateProductCount(purchaseProductNum, "xxx", new Date(), product.getId());
+
+
+    // 校验库存
+    // 如果库存为负数, 报错
+
+    // ------------------------ 创建订单 ------------------------
+    Order order = new Order();
+    order.setOrderAmount(product.getPrice().multiply(new BigDecimal(purchaseProductNum)));
+    order.setOrderStatus(1);//待处理
+    order.setReceiverName("xxx");
+    order.setReceiverMobile("13311112222");
+    order.setCreateTime(new Date());
+    order.setCreateUser("xxx");
+    order.setUpdateTime(new Date());
+    order.setUpdateUser("xxx");
+    orderMapper.insertSelective(order);
+
+    OrderItem orderItem = new OrderItem();
+    orderItem.setOrderId(order.getId());
+    orderItem.setProductId(product.getId());
+    orderItem.setPurchasePrice(product.getPrice());
+    orderItem.setPurchaseNum(purchaseProductNum);
+    orderItem.setCreateUser("xxx");
+    orderItem.setCreateTime(new Date());
+    orderItem.setUpdateTime(new Date());
+    orderItem.setUpdateUser("xxx");
+    orderItemMapper.insertSelective(orderItem);
+    platformTransactionManager.commit(transaction);
+    return order.getId();
+}
+```
+
+整个事务都在锁内
+
+运行后:
+
+```
+pool-1-thread-4库存数：1
+订单id: 37
+pool-1-thread-3库存数：0
+java.lang.Exception: 商品100100仅剩0件，无法购买
+pool-1-thread-2库存数：0
+java.lang.Exception: 商品100100仅剩0件，无法购买
+pool-1-thread-1库存数：0
+java.lang.Exception: 商品100100仅剩0件，无法购买
+pool-1-thread-5库存数：0
+java.lang.Exception: 商品100100仅剩0件，无法购买
+```
+
+查看数据库, 库存为0, 成功解决.
+
+
+
+### 块锁
+
+三种写法:
+
+```java
+// 对象锁, 获得this的线程才可以执行同步块内容, this就是当前的类(OrderService)的实例, 单例
+synchronized (this) {
+}
+```
+
+```java
+// 对象锁, 类中写一个object, 同上, 获得object对象的锁执行块的内容 . 和写this一样, 都是单例
+Object object = new Object();
+synchronized (object) {
+}
+```
+上面两种都是对象锁, 线程争抢对象.
+```java
+// 类锁, 获得orderService类的线程的锁
+synchronized (OrderServiceImpl.class) {
+
+}
+```
+
+类锁和对象锁的区别:
+
+对象锁: 对象是类new出来的, 有多个对象的时候, 不同的线程要争抢多个对象, 还可能有并发的情况. 
+
+类锁: 只能有一个线程获取到, 类只有一个
+
+```java
+package com.example.distributedemo.service.impl;
+
+import com.example.distributedemo.dao.OrderItemMapper;
+import com.example.distributedemo.dao.OrderMapper;
+import com.example.distributedemo.dao.ProductMapper;
+import com.example.distributedemo.model.Order;
+import com.example.distributedemo.model.OrderItem;
+import com.example.distributedemo.model.Product;
+import com.example.distributedemo.service.OrderService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+
+import javax.annotation.Resource;
+import java.math.BigDecimal;
+import java.util.Date;
+
+/**
+ * synchronized块锁
+ *
+ * 自己管理事务的提交
+ */
+@Service("OrderServiceImpl4_synchronized")
+@Slf4j
+public class OrderServiceImpl4_synchronized implements OrderService {
+
+    @Resource
+    private OrderMapper orderMapper;
+    @Resource
+    private OrderItemMapper orderItemMapper;
+    @Resource
+    private ProductMapper productMapper;
+    //购买商品id
+    private int purchaseProductId = 100100;
+    //购买商品数量
+    private int purchaseProductNum = 1;
+
+    @Autowired
+    private PlatformTransactionManager platformTransactionManager;
+
+    @Autowired
+    private TransactionDefinition transactionDefinition;
+
+    // @Transactional(rollbackOn = Exception.class)
+    @Override
+    public Integer createOrder() throws Exception {
+        Product product = null;
+        synchronized (this) {
+            TransactionStatus transaction1 = platformTransactionManager.getTransaction(transactionDefinition);
+            product = productMapper.selectByPrimaryKey(purchaseProductId);
+            if (product == null) {
+                platformTransactionManager.rollback(transaction1);
+                throw new Exception("购买商品：" + purchaseProductId + "不存在");
+            }
+
+            // 商品当前库存
+            Integer currentCount = product.getCount();
+            // 当前线程名称
+            System.out.println(Thread.currentThread().getName() + "库存数: " + currentCount);
+
+            // 重要: 校验库存
+            if (purchaseProductNum > currentCount) {
+                platformTransactionManager.rollback(transaction1);
+                throw new Exception("商品" + purchaseProductId + "仅剩" + currentCount + "件，无法购买");
+            }
+
+            // 使用数据库行锁解决超卖
+            productMapper.updateProductCount(purchaseProductNum, "xxx", new Date(), product.getId());
+
+            platformTransactionManager.commit(transaction1);
+        }
+        // ------------------------ 创建订单 ------------------------
+        // 插入的时候也新建事务
+        TransactionStatus transaction2 = platformTransactionManager.getTransaction(transactionDefinition);
+
+        Order order = new Order();
+        order.setOrderAmount(product.getPrice().multiply(new BigDecimal(purchaseProductNum)));
+        order.setOrderStatus(1);//待处理
+        order.setReceiverName("xxx");
+        order.setReceiverMobile("13311112222");
+        order.setCreateTime(new Date());
+        order.setCreateUser("xxx");
+        order.setUpdateTime(new Date());
+        order.setUpdateUser("xxx");
+        orderMapper.insertSelective(order);
+
+        OrderItem orderItem = new OrderItem();
+        orderItem.setOrderId(order.getId());
+        orderItem.setProductId(product.getId());
+        orderItem.setPurchasePrice(product.getPrice());
+        orderItem.setPurchaseNum(purchaseProductNum);
+        orderItem.setCreateUser("xxx");
+        orderItem.setCreateTime(new Date());
+        orderItem.setUpdateTime(new Date());
+        orderItem.setUpdateUser("xxx");
+        orderItemMapper.insertSelective(orderItem);
+        platformTransactionManager.commit(transaction2);
+        return order.getId();
+    }
+}
 ```
 
 
 
 
 
+与上文一致
 
-
-
-
-
-
-
-
-
-
-
+```
+pool-1-thread-5库存数：1
+订单id: 37
+pool-1-thread-4库存数：0
+java.lang.Exception: 商品100100仅剩0件，无法购买
+pool-1-thread-3库存数：0
+java.lang.Exception: 商品100100仅剩0件，无法购买
+pool-1-thread-2库存数：0
+java.lang.Exception: 商品100100仅剩0件，无法购买
+pool-1-thread-1库存数：0
+java.lang.Exception: 商品100100仅剩0件，无法购买
+```
 
 
 

@@ -22,7 +22,7 @@ public class DistributeDemoApplicationTests {
     // 2. 扣除库存逻辑放到数据库中
     // @Qualifier("OrderServiceImpl2_dbupdate")
 
-    @Qualifier("OrderServiceImpl3_synchronized")
+    @Qualifier("OrderServiceImpl4_synchronized")
     @Autowired
     private OrderService orderService;
 
