@@ -955,23 +955,19 @@ java.lang.Exception: 商品100100仅剩0件，无法购买
 
 不能跨JVM, 解决该问题: 分布式锁
 
-
-
-
-
-
-
-
-
-
-
-
+8080和8081, 分别请求, 可以看到单体锁并没有用
 
 
 
 # 基于数据库的分布式锁
 
+找到一个所有JVM可以访问的第三方公共组件
 
+多个进程、多个线程访问共同组件数据库
+
+通过select ... for update访问同一条数据: select检索出来的数据, 加锁, 其他的无法再对数据加锁, 不可以修改这些数据. 
+
+for update锁定数据, 其他线程只能等待
 
 
 
@@ -987,11 +983,55 @@ java.lang.Exception: 商品100100仅剩0件，无法购买
 
 # Redis分布式锁
 
-## Redis分布式锁原理
+## 基于Redis的Setnx实现分布式锁
 
 
+获取锁的Redis命令:
 
+SET resource_name my_random_value NX PX 30000
 
+* resource name: 资源名称, 可根据不同的业务区分不同的锁
+
+* my_random_value: 随机值, 每个线程的随机值都不同(UUID), 用于释放锁时的校验
+
+* NX: key不存在时设置成功, key存在则设置不成功. setnx是原子性操作, redis单线程, 并发请求过来到redis都是顺序的
+
+* PX: 自动失效时间, 出现异常情况, 锁可以过期失效. 防止释放锁的时候发生异常, Redis中记录一直存在, 其他线程永远无法得到锁
+
+原理:
+
+* 利用NX的原子性, 多个线程并发时, 只有一个线程可以设置成功
+
+* 设置成功即获得锁, 可以执行后续的业务处理
+
+* 如果出现异常, 过了锁的有效期, 锁自动释放
+
+* 释放锁采用Redis的delete命令
+
+* 释放锁时校验之前设置的随机数，相同才能释放. 证明Redis中key的值是由一个线程设置的, 我设置的, 我拿到的锁, 我来释放.
+* delete命令没有提供值校验, 所以要书写释放锁的LUA脚本.
+
+```lua
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+```
+
+如果释放锁的时候没有做值校验, 那么可能释放别的线程加的锁: 原因如下图
+
+<img src="img/distribute-lock/image-20220123121930433.png" alt="image-20220123121930433" style="zoom:67%;" />
+
+A获得锁
+
+-> A执行任务, 但是任务时间较长, 在执行期间锁过期了
+
+-> B获得到了锁, B处理业务ing
+
+-> 这个时候A执行完成了, A中要去释放锁, 因为没有校验, 就会释放B的锁. 错误!
+
+所以A释放锁的时候需要校验是不是自己的锁, 如果不是A加的锁, 那么A就不做处理(return 0)
 
 
 
@@ -1019,6 +1059,42 @@ java.lang.Exception: 商品100100仅剩0件，无法购买
 
 ## zookeeper分布式锁原理
 
+### zookeeper观察期
+
+zookeeper观察期: 检测zk某一节点的变化, 通知client节点变化
+
+* 可设置观察器的3个方法:
+  * getData(): 获取数据
+  * getChildren(): 获取子节点
+  * exists(): 当前节点是否存在
+
+* 节点数据发生变化，发送给客户端
+
+* 观察器只能监控一次，再监控需重新设置. -> curator升级解决该问题
+
+### zk分布式锁实现原理
+
+* 利用Zookeeper的瞬时有序节点的特性.
+
+* 多线程并发创建瞬时节点时，得到有序的序列. eg:10个线程同时过来, 就会创建10个有序序列
+
+* 序号最小的线程获得锁
+* 其他的线程监听自己序号的前一个序号. 
+* 前一个序号执行完成, 删除自己序号的节点.
+* 立刻发出通知下一个序号, 继续执行. 以此类推
+
+按照这个逻辑实现zk的分布式锁, 创建节点时, 已经确定了线程的执行顺序.
+
+---
+
+图解
+
+<img src="img/distribute-lock/image-20220123160239097.png" alt="image-20220123160239097" style="zoom:50%;" />
+
+线程B监听序号为1的节点, 设置观察器监听序号为1的节点. 
+
+C设置观察器监听序号为2的节点, 以此类推.
+
 
 
 
@@ -1033,7 +1109,30 @@ java.lang.Exception: 商品100100仅剩0件，无法购买
 
 
 
-# curator分布式锁
+# 基于zk的curator客户端实现分布式锁
+
+* 引入curator客户端
+
+* curator已经实现了分布式锁的方法
+
+[Apache Curator](https://curator.apache.org/)
+
+Distributed Lock
+
+```java
+InterProcessMutex lock = new InterProcessMutex(client, lockPath);
+if ( lock.acquire(maxWait, waitUnit) ) 
+{
+    try 
+    {
+        // do some work inside of the critical section here
+    }
+    finally
+    {
+        lock.release();
+    }
+}
+```
 
 
 
@@ -1041,7 +1140,13 @@ java.lang.Exception: 商品100100仅剩0件，无法购买
 
 
 
-# redisson分布式锁
+
+
+
+
+
+
+# 基于Redisson分布式锁
 
 
 
